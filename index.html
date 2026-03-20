@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Templar (SN3) Deep Dive</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --card: #ffffff;
+    --border: #e5e5e0;
+    --text: #1a1a1a;
+    --muted: #6b6b6b;
+    --accent: #5046e5;
+    --accent2: #d4421e;
+    --green: #16803c;
+    --amber: #b45309;
+    --red: #c0392b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7; padding: 0 0 80px 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .hero {
+    background: #ffffff;
+    border-bottom: 1px solid var(--border); padding: 64px 20px 52px; text-align: center;
+  }
+  .hero h1 {
+    font-size: 2.5rem; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 8px;
+    color: #1a1a1a;
+  }
+  .hero .sub { color: var(--muted); font-size: 1.05rem; margin-top: 6px; }
+  .hero .date { color: #999; font-size: 0.85rem; margin-top: 12px; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+  .section { margin-top: 52px; }
+  .section h2 {
+    font-size: 1.5rem; font-weight: 700; margin-bottom: 20px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border); color: #1a1a1a;
+  }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 12px; color: #333; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin: 20px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 16px; text-align: center; }
+  .kpi .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 5px; }
+  .kpi .value { font-size: 1.5rem; font-weight: 700; }
+  .kpi .sub-val { font-size: 0.82rem; margin-top: 3px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin: 20px 0; }
+  .card.alert { border-left: 4px solid var(--amber); background: #fffbeb; }
+  .card.danger { border-left: 4px solid var(--red); background: #fef2f2; }
+  .card.success { border-left: 4px solid var(--green); background: #f0fdf4; }
+  .chart-container { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 20px 0; }
+  .chart-container canvas { max-height: 400px; }
+  .chart-title { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: #444; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  table th, table td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; }
+  table th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.06em; }
+  .hl { color: var(--accent); font-weight: 600; }
+  .hl-r { color: var(--accent2); font-weight: 600; }
+  .hl-g { color: var(--green); font-weight: 600; }
+  .hl-a { color: var(--amber); font-weight: 600; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } .hero h1 { font-size: 1.8rem; } .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+  .tldr {
+    background: #f5f3ff;
+    border: 1px solid #ddd6fe; border-radius: 12px; padding: 28px; margin: 24px 0; font-size: 1.02rem;
+  }
+  .tldr strong { color: var(--accent); }
+  .tldr ul { margin: 12px 0 0 20px; }
+  .tldr li { margin-bottom: 8px; }
+  .progress-bar { background: #e5e5e0; border-radius: 8px; height: 32px; overflow: hidden; margin: 12px 0; }
+  .progress-bar .fill { height: 100%; border-radius: 8px; display: flex; align-items: center; padding-left: 12px; font-size: 0.8rem; font-weight: 600; color: white; }
+  .tag { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; margin: 2px 4px 2px 0; }
+  .tag.red { background: #fef2f2; color: var(--red); border: 1px solid #fecaca; }
+  .tag.green { background: #f0fdf4; color: var(--green); border: 1px solid #bbf7d0; }
+  .tag.amber { background: #fffbeb; color: var(--amber); border: 1px solid #fde68a; }
+  .tag.blue { background: #eef2ff; color: var(--accent); border: 1px solid #c7d2fe; }
+  .source-list { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 0.85rem; color: var(--muted); }
+  .source-list a { color: var(--accent); text-decoration: none; }
+  .source-list a:hover { text-decoration: underline; }
+  .source-list li { margin-bottom: 6px; }
+  p { margin-bottom: 12px; }
+  a { color: var(--accent); }
+  ul, ol { margin-left: 18px; }
+  li { margin-bottom: 6px; }
+  .explainer { background: #f9fafb; border: 1px solid var(--border); border-radius: 10px; padding: 22px 24px; margin: 16px 0; font-size: 0.95rem; }
+  .explainer .ex-title { font-weight: 700; font-size: 0.95rem; color: var(--accent); margin-bottom: 8px; }
+  .flow-diagram { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0; font-size: 0.9rem; font-weight: 600; }
+  .flow-box { background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 10px 16px; text-align: center; }
+  .flow-arrow { color: var(--muted); font-size: 1.2rem; }
+  .vs-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; align-items: start; margin: 16px 0; }
+  .vs-grid .vs { color: #aaa; font-weight: 700; font-size: 1.1rem; align-self: center; text-align: center; }
+  @media (max-width: 768px) { .vs-grid { grid-template-columns: 1fr; } .vs-grid .vs { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Templar (SN3) Deep Dive</h1>
+  <div class="sub">Token Dilution, Covenant-72B, and What It All Means</div>
+  <div class="date">March 20, 2026 &mdash; CoinGecko daily data + arxiv paper analysis</div>
+</div>
+
+<div class="container">
+
+<!-- ============ TLDR ============ -->
+<div class="tldr">
+  <strong>Templar (SN3) TL;DR</strong>
+  <ul>
+    <li><strong>Massive dilution:</strong> Supply went from 1.27M to 4.22M in 9 months (3.3x). Market cap is at ATH ($90M) but price is -52% from ATH because new tokens absorbed all demand growth. Only 20% of the 21M max supply has been issued.</li>
+    <li><strong>Covenant-72B:</strong> Largest permissionless AI training run ever. ~160 B200 GPUs, ~91 days. Quality matches LLaMA-2-70B (mid-2023 era) &mdash; roughly 3 years behind today's frontier models.</li>
+    <li><strong>Cost:</strong> Cloud equivalent ~$1.3M. Bittensor actually paid ~$6.5M worth of newly-minted TAO tokens. That's a 3-5x "decentralization premium" &mdash; and the cost was borne by all token holders via inflation.</li>
+    <li><strong>Scaling problem:</strong> Training used 8-GPU nodes. Bigger models need 16+ GPU nodes &mdash; far fewer people own those, which undermines the whole "anyone can participate" pitch.</li>
+  </ul>
+</div>
+
+<!-- ============ MARKET SNAPSHOT ============ -->
+<div class="section">
+  <h2>Current Market</h2>
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="label">Price</div>
+      <div class="value">$21.36</div>
+      <div class="sub-val" style="color:var(--red)">-52.0% from ATH ($44.47)</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Market Cap</div>
+      <div class="value" style="font-size:1.35rem">$89.8M</div>
+      <div class="sub-val" style="color:var(--amber)">All-Time High</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Circulating Supply</div>
+      <div class="value" style="font-size:1.3rem">4.22M</div>
+      <div class="sub-val" style="color:var(--muted)">16.78M left to emit</div>
+    </div>
+    <div class="kpi">
+      <div class="label">True FDV</div>
+      <div class="value" style="font-size:1.3rem">$448M</div>
+      <div class="sub-val" style="color:var(--muted)">21M max &times; $21.36</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Supply Issued</div>
+      <div class="value hl-a">20.1%</div>
+      <div class="sub-val" style="color:var(--red)">~4x dilution ahead</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PRICE vs MCAP ============ -->
+<div class="section">
+  <h2>The Dilution Story</h2>
+
+  <div class="chart-container">
+    <div class="chart-title">Price vs Market Cap &mdash; Watch the Lines Diverge</div>
+    <canvas id="priceMcapChart"></canvas>
+  </div>
+
+  <div class="card danger">
+    <p style="margin-bottom:0">The green line (market cap) is at all-time highs. The purple line (price) is half its ATH. <strong>The gap between these two lines is dilution.</strong> More tokens exist today, so the same market cap gets spread across more tokens = lower price per token. This is the single most important thing to understand about Templar's price action.</p>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-title">Implied Circulating Supply vs Price &mdash; The Emission Ramp</div>
+    <canvas id="supplyPriceChart"></canvas>
+  </div>
+
+  <div class="card alert">
+    <h3 style="margin-top:0">Reading This Chart</h3>
+    <p><strong>Phase 1 (Jun 6 &ndash; Jul 25):</strong> Supply was flat at ~1.27M. Whoever received the initial supply sold hard &mdash; price dropped from $43 to $19 in 7 weeks. Classic early-holder distribution.</p>
+    <p><strong>Phase 2 (Jul 26 onwards):</strong> Alpha token emissions turned on. Supply jumped from 1.27M to 1.88M overnight, then grew steadily at ~12-15K tokens/day. Price briefly rallied to $33 but couldn't overcome the constant sell pressure from new emissions. From here, it's been a grinding decline from $29 to a low of $4.87 as supply more than doubled.</p>
+    <p style="margin-bottom:0"><strong>Phase 3 (Mar 10 &ndash; now):</strong> Covenant-72B announced. Demand spiked, price 4x'd from ~$5 to ~$21. But supply is still growing every day &mdash; the question is whether this demand holds or fades like the Jul '25 rally did.</p>
+  </div>
+
+  <!-- Supply progress -->
+  <div class="card">
+    <h3 style="margin-top:0">Where We Are in the Emission Curve</h3>
+    <p>4.22M of 21M tokens issued:</p>
+    <div class="progress-bar">
+      <div class="fill" style="width: 20.1%; background: linear-gradient(90deg, var(--accent), var(--accent2));">20.1%</div>
+    </div>
+    <p>At current emission rate (~12K tokens/day), full dilution to 21M takes roughly <strong>3.8 more years</strong>. However, the halving in Dec 2025 already slowed emissions 50%, and the next halving (~2029) will slow them again. Supply will approach 21M asymptotically, like Bitcoin.</p>
+    <div class="chart-container" style="margin-bottom:0; border:none; padding: 16px 0 0 0;">
+      <div class="chart-title">Projected Supply Curve</div>
+      <canvas id="projectionChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HOW EMISSIONS WORK ============ -->
+<div class="section">
+  <h2>How Templar Token Emissions Actually Work</h2>
+  <p style="color:var(--muted)">If you're not deep in the Bittensor ecosystem, this section explains the mechanics that drive dilution.</p>
+
+  <div class="card">
+    <h3 style="margin-top:0">The Big Picture</h3>
+    <p>Bittensor is a network of 128 "subnets" &mdash; think of them as competing AI projects. Each day, the network mints <strong>3,600 new TAO tokens</strong> (~$1M/day) and distributes them to subnets based on how much stake (investment) they attract. Templar (Subnet 3) gets the biggest share: <strong>6.86%</strong>, or ~247 TAO/day (~$71K/day).</p>
+    <p style="margin-bottom:0">This is how miners get paid for providing GPU compute. There's no revenue, no customers &mdash; it's all token inflation. The cost of everything (GPU compute, model training, coordination) is funded by minting new tokens.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Two Tokens, Two Layers of Dilution</h3>
+    <p>Each subnet has its own token (called an "alpha" token) that trades against TAO in a liquidity pool. For Templar, the alpha token is what you buy on CoinGecko. Here's how the two layers work:</p>
+
+    <div class="explainer">
+      <div class="ex-title">Layer 1: TAO Emissions (network level)</div>
+      <p style="margin-bottom:0">Every day, 3,600 new TAO are minted across the whole Bittensor network. TAO has a 21M max supply, ~8.9M currently circulating. Annual inflation: ~13%. This was 26%+ before the Dec 2025 halving cut daily emissions from 7,200 to 3,600.</p>
+    </div>
+
+    <div class="explainer">
+      <div class="ex-title">Layer 2: Alpha Emissions (subnet level)</div>
+      <p style="margin-bottom:0">Each subnet also emits its own alpha tokens. Templar's alpha has a 21M max supply, ~4.22M circulating. New alpha is created each block and split between: miners (GPU providers), validators (quality checkers), and the subnet creator. This is the direct source of the supply growth you see in the charts above.</p>
+    </div>
+  </div>
+
+  <div class="card alert">
+    <h3 style="margin-top:0">What Does TAO Flowing Into the SN3 Pool Actually Do?</h3>
+    <p>This is confusing because it cuts both ways. Here's the mechanic:</p>
+    <p>Templar's alpha token trades in an <strong>AMM liquidity pool</strong> (like Uniswap) against TAO. The pool has two sides: TAO and alpha tokens. When ~247 TAO/day flows in from emissions:</p>
+
+    <div class="explainer">
+      <div class="ex-title">Bullish effect: More TAO backing each alpha token</div>
+      <p style="margin-bottom:0">More TAO in the pool means the pool's "reserves" grow on the TAO side. Since alpha price = TAO in pool / alpha in pool, adding TAO to the pool pushes the alpha price <strong>up</strong>. It's like the subnet getting a daily cash injection. This is why Templar's market cap has been able to grow despite constant selling &mdash; new TAO keeps flowing in.</p>
+    </div>
+
+    <div class="explainer">
+      <div class="ex-title">Bearish effect: It's funded by inflation, not real demand</div>
+      <p style="margin-bottom:0">That 247 TAO/day isn't coming from customers paying for AI services. It's newly minted TAO. So the "cash injection" is really just inflation on the TAO side. If TAO's price drops (because TAO itself is being diluted), the dollar value of that daily injection drops too. It's a circular system &mdash; tokens backing tokens backing tokens, with no external revenue anchor.</p>
+    </div>
+
+    <div class="explainer">
+      <div class="ex-title">The tiebreaker: Staking flows</div>
+      <p style="margin-bottom:0">Since Nov 2025, Bittensor uses "TaoFlow" &mdash; emission share is based on <strong>net staking inflows</strong>, not just price. If people stake more TAO into Templar, it gets a bigger share of daily emissions. If they unstake, the share drops. This is why the 6.86% number isn't fixed &mdash; it's a market signal of confidence. Right now, Templar has the highest share, meaning the market is voting it the most valuable subnet.</p>
+    </div>
+
+    <p style="margin-bottom:0"><strong>Bottom line:</strong> TAO inflows support the alpha price mechanically (more reserves in the pool), but the support is only as strong as TAO's own value, which itself depends on the overall network delivering real utility. It's reflexive &mdash; works great on the way up, unwinds on the way down.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Key Numbers</h3>
+    <table>
+      <tr><td>SN3 emission share</td><td class="hl">6.86% (highest of 128 subnets)</td></tr>
+      <tr><td>Daily TAO to SN3</td><td>~247 TAO (~$71K/day)</td></tr>
+      <tr><td>Total daily TAO minted</td><td>3,600 TAO (~$1M/day)</td></tr>
+      <tr><td>Last halving</td><td>Dec 14, 2025 (7,200 &rarr; 3,600 TAO/day)</td></tr>
+      <tr><td>Next halving (est.)</td><td>Late 2029</td></tr>
+      <tr><td>SN3 alpha in LP pool</td><td>~1.54M</td></tr>
+      <tr><td>SN3 alpha staked</td><td>~2.68M</td></tr>
+      <tr><td>Total holders</td><td>6,374</td></tr>
+      <tr><td style="border:none">Sentiment</td><td style="border:none"><span class="tag red">Fear & Greed: 81.2 (Extreme Greed)</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============ COVENANT-72B ============ -->
+<div class="section">
+  <h2>Covenant-72B: What They Built and What It Cost</h2>
+
+  <div class="card success">
+    <h3 style="margin-top:0">The Achievement in Plain English</h3>
+    <p>On March 10, 2026, Templar finished training a 72-billion-parameter AI model called Covenant-72B. What makes it special isn't the model itself &mdash; it's <strong>how</strong> it was trained:</p>
+    <ul>
+      <li><strong>No data center.</strong> Instead of renting a massive GPU cluster from Google or AWS, they used ~20 independent people around the world, each contributing 8 high-end GPUs (NVIDIA B200s). ~70 unique participants joined over the course of the run.</li>
+      <li><strong>No whitelist.</strong> Anyone with the right hardware could join or leave at any time. Previous decentralized training runs required an invite. This was fully open.</li>
+      <li><strong>Commodity internet.</strong> Peers communicated over regular internet connections using a clever compression algorithm (SparseLoCo) that shrinks data by 146x, so bandwidth wasn't a bottleneck.</li>
+    </ul>
+    <p style="margin-bottom:0">Jensen Huang (NVIDIA CEO), Chamath Palihapitiya, and Jack Clark (Anthropic co-founder) all publicly acknowledged the milestone.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">How Good Is the Model?</h3>
+    <p>Covenant-72B scores <strong>67.1 on MMLU</strong>, a standard AI benchmark. To put that in perspective:</p>
+
+    <div class="chart-container" style="border:none; padding: 8px 0;">
+      <canvas id="benchmarkChart"></canvas>
+    </div>
+
+    <p><strong>Translation:</strong> Covenant-72B is roughly as smart as Meta's LLaMA-2-70B from <strong>July 2023</strong> &mdash; about 3 years behind today's frontier models (which score 90+). It actually beats LLaMA-2 on math (26.3 vs 10.7) despite training on half the data.</p>
+    <p style="margin-bottom:0">The model isn't commercially competitive with what's available today. But that's not really the point &mdash; the point is proving that permissionless, decentralized training <em>works</em> at meaningful scale. Whether it can close the gap to frontier models is the open question.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">What Did It Cost?</h3>
+    <p>There are two ways to think about the cost:</p>
+
+    <div class="vs-grid">
+      <div class="card" style="margin:0; border-left: 3px solid var(--accent);">
+        <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px">If You Rented GPUs Normally</div>
+        <div style="font-size:1.8rem; font-weight:700; color:var(--accent)">~$1.3M</div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0">~300K B200 GPU-hours at $3-5/hr cloud rates. For context, Meta spent ~$2M training LLaMA-2-70B on A100s in 2023 &mdash; but with 2x more training data.</p>
+      </div>
+      <div class="vs">vs</div>
+      <div class="card" style="margin:0; border-left: 3px solid var(--amber);">
+        <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px">What Bittensor Actually Paid</div>
+        <div style="font-size:1.8rem; font-weight:700; color:var(--amber)">~$6.5M</div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0">~22,500 TAO in emissions over ~91 days at current prices. This TAO was <strong>newly minted</strong> &mdash; not from a treasury. The cost was borne by all TAO/alpha holders through inflation.</p>
+      </div>
+    </div>
+
+    <p style="margin-top:20px">That's a <strong>3-5x "decentralization premium"</strong> over just renting GPUs from a cloud provider. You're paying extra for:</p>
+    <ul>
+      <li>Permissionless participation (no one can shut it down)</li>
+      <li>Blockchain coordination overhead (Gauntlet scoring, on-chain verification)</li>
+      <li>Incentive overpayment (need to attract enough GPUs to the network)</li>
+      <li>Communication overhead (~5.5% of time lost to syncing gradients over internet)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ GPU SCALING ============ -->
+<div class="section">
+  <h2>The Scaling Problem</h2>
+
+  <div class="card">
+    <p>Covenant-72B needed each participant to have <strong>8 NVIDIA B200 GPUs</strong> wired together with high-speed NVLink inside a single machine. That's a ~$200-300K setup. The clever SparseLoCo algorithm handles communication <em>between</em> machines over the internet, but <em>within</em> each machine, you need all 8 GPUs tightly connected to fit the model in memory.</p>
+
+    <p>Here's the problem: <strong>bigger models need bigger machines.</strong></p>
+
+    <table>
+      <tr><th>Model Size</th><th>GPUs per Node</th><th>Who Can Participate</th></tr>
+      <tr><td>72B (Covenant)</td><td class="hl-g">8x B200</td><td>Hundreds of GPU providers</td></tr>
+      <tr><td>200B</td><td class="hl-a">16x B200</td><td>Dozens (purpose-built DGX systems)</td></tr>
+      <tr><td>400B</td><td class="hl-r">32x B200</td><td>A handful (CoreWeave, Lambda, hyperscalers)</td></tr>
+      <tr><td style="border:none">700B+ (frontier)</td><td style="border:none" class="hl-r">64x+</td><td style="border:none">Essentially centralized</td></tr>
+    </table>
+
+    <p style="margin-top:16px; margin-bottom:0"><strong>The paradox:</strong> The whole pitch of Templar is "anyone can help train AI." But as models get bigger, fewer and fewer people have big enough machines to participate. At frontier scale (700B+), you're back to needing the same massive clusters that Google and Meta use &mdash; defeating the purpose. Whether the team can find creative solutions to this (model parallelism tricks, heterogeneous hardware support) will determine if this scales beyond a proof of concept.</p>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-title">The Decentralization Tradeoff: Bigger Models = Fewer Participants</div>
+    <canvas id="scalingChart"></canvas>
+  </div>
+</div>
+
+<!-- ============ BULL / BEAR ============ -->
+<div class="section">
+  <h2>So Is This a Good Investment?</h2>
+  <div class="two-col">
+    <div class="card" style="border-left: 3px solid var(--green);">
+      <h3 style="margin-top:0; color:var(--green)">Bull Case</h3>
+      <ul>
+        <li>Genuine technical milestone &mdash; largest permissionless training ever</li>
+        <li>Endorsed by Jensen Huang, Chamath, Jack Clark</li>
+        <li>Highest emission share of any Bittensor subnet (market's vote of confidence)</li>
+        <li>Halving already cut emissions 50%; supply growth is decelerating</li>
+        <li>Only 20% of supply out = you're early if the thesis plays out</li>
+        <li>Templar Crusades (upcoming competition format) could attract more developers</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--red);">
+      <h3 style="margin-top:0; color:var(--red)">Bear Case</h3>
+      <ul>
+        <li>Model quality ~3 years behind frontier &mdash; not commercially useful today</li>
+        <li>~80% supply dilution ahead (FDV is 5x current market cap)</li>
+        <li>Training cost 3-5x more than centralized &mdash; hard to justify economically</li>
+        <li>Scaling to bigger models undermines the decentralization thesis</li>
+        <li>No revenue &mdash; everything is funded by token inflation</li>
+        <li>Extreme Greed sentiment (81.2) after a 194% weekly pump</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card alert">
+    <h3 style="margin-top:0">The Dilution Math to Keep in Mind</h3>
+    <table>
+      <tr><td>For price to <strong>stay at $21.36</strong> at full dilution</td><td>Market cap needs to reach <strong>$448M</strong> (5x from today)</td></tr>
+      <tr><td>If market cap doubles to $180M</td><td>Price at full dilution: <strong>$8.57</strong> (-60% from here)</td></tr>
+      <tr><td>If market cap 3x's to $270M</td><td>Price at full dilution: <strong>$12.86</strong> (-40% from here)</td></tr>
+      <tr><td style="border:none">For price to <strong>double</strong> to $42.72 at full dilution</td><td style="border:none">Market cap needs to reach <strong>$897M</strong> (10x from today)</td></tr>
+    </table>
+    <p style="margin-top:16px; margin-bottom:0">Full dilution takes years (next halving ~2029), so demand has time to grow. But the bar is real: you need to believe this project reaches ~$450M+ market cap at maturity just to break even at today's price.</p>
+  </div>
+</div>
+
+<!-- ============ SOURCES ============ -->
+<div class="source-list">
+  <h3 style="color:var(--muted); margin-bottom:12px">Sources</h3>
+  <ul style="list-style:none; padding:0">
+    <li>Price / Market Cap / Supply: <a href="https://www.coingecko.com/en/coins/templar">CoinGecko Pro API</a> (289 daily data points, Jun 6 '25 &ndash; Mar 20 '26)</li>
+    <li>Training details: <a href="https://arxiv.org/abs/2603.08163">Covenant-72B Paper (arXiv 2603.08163)</a> &bull; <a href="https://huggingface.co/1Covenant/Covenant-72B">HuggingFace Model Card</a></li>
+    <li>Emission data: <a href="https://subnetalpha.ai/subnet/templar/">SubnetAlpha Dashboard</a> &bull; <a href="https://docs.learnbittensor.org/learn/emissions">Bittensor Docs</a> &bull; <a href="https://bittensorhalving.com/">Halving Tracker</a></li>
+    <li>Coverage: <a href="https://jack-clark.net/2026/03/16/importai-449-llms-training-other-llms-72b-distributed-training-run-computer-vision-is-harder-than-generative-text/">ImportAI #449</a> &bull; <a href="https://www.panewslab.com/en/articles/019cf9af-50fb-7390-9aab-7fe8dc000831">PANews</a> &bull; <a href="https://www.0xsammy.com/p/the-agentic-future-031726-covenant">0xSammy</a> &bull; <a href="https://www.cryptotimes.io/2026/03/20/bittensor-tao-jumps-17-as-nvidia-ceo-praises-decentralized-ai-training/">CryptoTimes</a></li>
+    <li>LLaMA-2-70B cost ref: <a href="https://x.com/karpathy/status/1681661711580020736">Karpathy (1.72M A100-hrs, ~$2M)</a></li>
+  </ul>
+</div>
+
+</div>
+
+<script>
+// ====== DATA ======
+const labels = ["2025-06-06","2025-06-07","2025-06-08","2025-06-09","2025-06-10","2025-06-11","2025-06-12","2025-06-13","2025-06-14","2025-06-15","2025-06-16","2025-06-17","2025-06-18","2025-06-19","2025-06-20","2025-06-21","2025-06-22","2025-06-23","2025-06-24","2025-06-25","2025-06-26","2025-06-27","2025-06-28","2025-06-29","2025-06-30","2025-07-01","2025-07-02","2025-07-03","2025-07-04","2025-07-05","2025-07-06","2025-07-07","2025-07-08","2025-07-09","2025-07-10","2025-07-11","2025-07-12","2025-07-13","2025-07-14","2025-07-15","2025-07-16","2025-07-17","2025-07-18","2025-07-19","2025-07-20","2025-07-21","2025-07-22","2025-07-23","2025-07-24","2025-07-25","2025-07-26","2025-07-27","2025-07-28","2025-07-29","2025-07-30","2025-07-31","2025-08-01","2025-08-02","2025-08-03","2025-08-04","2025-08-05","2025-08-06","2025-08-07","2025-08-08","2025-08-09","2025-08-10","2025-08-11","2025-08-12","2025-08-13","2025-08-14","2025-08-15","2025-08-16","2025-08-17","2025-08-18","2025-08-19","2025-08-20","2025-08-21","2025-08-22","2025-08-23","2025-08-24","2025-08-25","2025-08-26","2025-08-27","2025-08-28","2025-08-29","2025-08-30","2025-08-31","2025-09-01","2025-09-02","2025-09-03","2025-09-04","2025-09-05","2025-09-06","2025-09-07","2025-09-08","2025-09-09","2025-09-10","2025-09-11","2025-09-12","2025-09-13","2025-09-14","2025-09-15","2025-09-16","2025-09-17","2025-09-18","2025-09-19","2025-09-20","2025-09-21","2025-09-22","2025-09-23","2025-09-24","2025-09-25","2025-09-26","2025-09-27","2025-09-28","2025-09-29","2025-09-30","2025-10-01","2025-10-02","2025-10-03","2025-10-04","2025-10-05","2025-10-06","2025-10-07","2025-10-08","2025-10-09","2025-10-10","2025-10-11","2025-10-12","2025-10-13","2025-10-14","2025-10-15","2025-10-16","2025-10-17","2025-10-18","2025-10-19","2025-10-20","2025-10-21","2025-10-22","2025-10-23","2025-10-24","2025-10-25","2025-10-26","2025-10-27","2025-10-28","2025-10-29","2025-10-30","2025-10-31","2025-11-01","2025-11-02","2025-11-03","2025-11-04","2025-11-05","2025-11-06","2025-11-07","2025-11-08","2025-11-09","2025-11-10","2025-11-11","2025-11-12","2025-11-13","2025-11-14","2025-11-15","2025-11-16","2025-11-17","2025-11-18","2025-11-19","2025-11-20","2025-11-21","2025-11-22","2025-11-23","2025-11-24","2025-11-25","2025-11-26","2025-11-27","2025-11-28","2025-11-29","2025-11-30","2025-12-01","2025-12-02","2025-12-03","2025-12-04","2025-12-05","2025-12-06","2025-12-07","2025-12-08","2025-12-09","2025-12-10","2025-12-11","2025-12-12","2025-12-13","2025-12-14","2025-12-15","2025-12-16","2025-12-17","2025-12-18","2025-12-19","2025-12-20","2025-12-21","2025-12-22","2025-12-23","2025-12-24","2025-12-25","2025-12-26","2025-12-27","2025-12-28","2025-12-29","2025-12-30","2025-12-31","2026-01-01","2026-01-02","2026-01-03","2026-01-04","2026-01-05","2026-01-06","2026-01-07","2026-01-08","2026-01-09","2026-01-10","2026-01-11","2026-01-12","2026-01-13","2026-01-14","2026-01-15","2026-01-16","2026-01-17","2026-01-18","2026-01-19","2026-01-20","2026-01-21","2026-01-22","2026-01-23","2026-01-24","2026-01-25","2026-01-26","2026-01-27","2026-01-28","2026-01-29","2026-01-30","2026-01-31","2026-02-01","2026-02-02","2026-02-03","2026-02-04","2026-02-05","2026-02-06","2026-02-07","2026-02-08","2026-02-09","2026-02-10","2026-02-11","2026-02-12","2026-02-13","2026-02-14","2026-02-15","2026-02-16","2026-02-17","2026-02-18","2026-02-19","2026-02-20","2026-02-21","2026-02-22","2026-02-23","2026-02-24","2026-02-25","2026-02-26","2026-02-27","2026-02-28","2026-03-01","2026-03-02","2026-03-03","2026-03-04","2026-03-05","2026-03-06","2026-03-07","2026-03-08","2026-03-09","2026-03-10","2026-03-11","2026-03-12","2026-03-13","2026-03-14","2026-03-15","2026-03-16","2026-03-17","2026-03-18","2026-03-19","2026-03-20"];
+const prices = [31.88,31.88,37.88,37.66,42.88,39.52,37.14,35.20,34.67,33.35,33.64,31.84,31.95,32.87,31.02,29.58,26.11,25.45,29.40,28.69,26.34,25.65,20.94,21.88,22.87,21.88,20.19,19.68,19.71,19.71,19.37,19.48,18.66,19.38,20.67,21.91,22.57,21.77,22.60,25.56,30.57,30.25,31.10,29.68,30.59,31.11,33.54,32.97,29.80,28.88,29.35,29.20,25.72,23.80,22.30,21.51,19.95,19.25,18.61,19.27,19.58,18.63,18.74,19.91,19.78,20.42,20.13,18.39,19.67,19.15,17.86,17.81,18.04,18.01,16.96,16.25,16.72,15.70,17.26,17.27,17.07,15.03,15.47,15.08,15.11,14.26,14.37,13.87,12.99,12.53,12.16,11.35,11.30,11.31,11.63,12.07,11.75,12.22,12.57,13.17,12.84,12.23,12.19,12.05,12.60,12.78,12.28,12.34,11.90,11.25,10.88,10.79,10.26,10.36,10.11,9.56,9.62,9.37,9.84,9.96,9.78,9.67,9.50,10.16,9.69,9.82,9.52,8.04,8.10,10.44,12.09,12.42,11.05,10.06,10.13,10.56,11.50,11.10,9.93,9.89,10.00,9.98,10.24,10.43,10.69,11.01,11.19,10.50,12.10,12.43,12.25,11.61,9.98,9.43,9.59,9.82,9.30,9.68,9.84,9.21,8.90,8.67,8.44,8.49,8.13,7.89,8.35,8.17,7.64,7.02,6.76,7.37,7.22,7.68,7.63,7.34,7.73,7.65,7.49,6.85,7.10,7.65,7.41,6.97,7.08,6.92,7.37,7.60,7.44,7.52,7.39,7.54,7.15,6.84,6.63,6.03,5.56,5.76,5.85,5.70,5.82,5.63,5.76,5.73,5.66,5.89,5.87,5.70,5.78,5.77,6.05,6.55,6.68,6.99,7.28,8.12,7.57,8.33,8.44,8.74,8.75,8.68,8.99,9.37,9.13,9.24,9.11,8.70,8.53,7.93,8.37,8.50,8.19,8.26,7.72,8.06,8.37,8.28,7.69,7.45,6.89,6.51,6.87,6.50,6.47,5.48,5.94,5.72,5.57,5.38,5.19,4.87,5.18,5.89,6.27,6.11,6.58,6.35,6.17,6.01,6.17,6.27,5.99,5.71,5.59,5.98,6.28,5.99,6.38,6.20,6.58,6.52,6.61,6.76,6.51,6.50,6.69,7.11,7.56,7.88,9.58,12.92,14.55,20.26,18.19,18.19,18.91,22.54,21.48];
+const mcaps = [0,0,48028210,47741461,54423120,49910049,47081481,44625952,43954990,42385154,42644874,40361247,40145128,41661117,39322604,37562930,33094402,32257036,37263844,36375825,33395722,32510211,26543210,27733832,28985779,27736320,25599540,24934468,24973973,24971858,24559628,24692739,23654861,24444526,26298893,27780291,28614293,27602245,28652134,32403218,38745630,38328387,39423001,37619226,38879768,39443532,42518610,41794687,37835322,36640495,55316818,55081782,48800931,45430625,42807685,41514173,38792081,37609231,36572504,38091553,38936588,37267424,37701981,40273875,40229423,41760958,41298290,38010323,40903891,39820035,37520808,37614238,38269609,38481333,36431652,35246111,36333083,34276502,37898039,38136700,37910057,33574359,34730205,34087739,34244669,32609260,32989712,32069373,30178948,29262509,28496641,26826110,26829196,27006733,27942021,29103228,28435717,29763621,30764621,32261822,31734424,30370612,30436622,30268984,31800942,32402265,31235091,31567433,30600174,29074070,28282787,28142562,26906239,27287665,26810715,25457667,25708704,25117980,26539468,26902287,26631452,26439536,26172233,28097789,26841023,27352668,26563789,22605031,22888522,29634120,34448331,35074938,31710895,29076958,29624601,30750410,33830117,32628101,29318013,29342541,29773107,29860695,30804957,31442647,32320572,33426854,34179547,32200932,37315750,38498077,37846256,36025125,31223520,29596332,30447562,31006419,29573750,30850459,31656331,29717991,28742158,28215915,27631786,27732886,26672665,25974502,27601093,27109281,25544615,23463194,22670785,24870250,24397015,26102922,25996626,25098761,26534170,26336075,25953667,23790921,24725689,26660260,25916490,24496467,24983611,24519457,26184027,27131477,26708338,27036681,26613198,27245245,25909016,24946711,24159006,22076720,20322130,21190028,21541416,21096143,21506693,20904394,21381445,21380440,21138694,22072075,21983553,21419463,21811100,21834621,22902088,24941264,25432965,26677249,27855139,31165750,29071703,32089740,32526276,33753941,33680636,33581428,34807010,36349094,35464382,35921080,35541404,33932844,33378279,31098259,32757854,33389918,32162175,32468521,30368116,31769406,33101255,32724217,30397381,29472725,27321050,25858383,27322819,25898150,25832179,22153145,23846416,22938565,22401204,21654727,20937690,19671403,20964681,23846322,25484829,24858217,26822902,25923918,25171923,24642218,25336670,25759930,24672711,23596506,23112569,24623040,25984758,24931174,26584597,25905493,27550302,27378007,27729589,28421346,27393902,27364598,28106275,30029657,32025053,33409238,40636728,54856357,61642465,86207815,77545446,77202968,79640977,95014001,89871488];
+const supply = [null,null,1267744,1267672,1269176,1262769,1267662,1267643,1267672,1270822,1267670,1267721,1256468,1267462,1267672,1269835,1267609,1267660,1267672,1267683,1267659,1267672,1267682,1267672,1267672,1267672,1267672,1266915,1266914,1267053,1267648,1267672,1267659,1261613,1272297,1267669,1267672,1267659,1267660,1267672,1267619,1267165,1267651,1267672,1271028,1267672,1267764,1267670,1269448,1268884,1884543,1886278,1897362,1908519,1919936,1929720,1944237,1953971,1965462,1976992,1988501,1999966,2011896,2022701,2033951,2045087,2051487,2066704,2079417,2079360,2100366,2112011,2121172,2137143,2148568,2169386,2172655,2183087,2195420,2207987,2220541,2233229,2245675,2260441,2266926,2286447,2296137,2312306,2323542,2334661,2343897,2363990,2374205,2387720,2402984,2410290,2420743,2435482,2447866,2450149,2471993,2483562,2497396,2512166,2523548,2534836,2543739,2557718,2572300,2584732,2598919,2608119,2622355,2634905,2651871,2662715,2672688,2681651,2697758,2701977,2722853,2733791,2754147,2764668,2770236,2784482,2789242,2812845,2824582,2837333,2850189,2823001,2869386,2890194,2924250,2912212,2940728,2940683,2952818,2965428,2977520,2991062,3009748,3014852,3023096,3035907,3054128,3067656,3083698,3097981,3090463,3102268,3129484,3139277,3173705,3159000,3181308,3187961,3218139,3226402,3228417,3255279,3275385,3266404,3279104,3291867,3303645,3317146,3343961,3341418,3355263,3373751,3380910,3397916,3406104,3418627,3431107,3444540,3464876,3472957,3484652,3484983,3499236,3513556,3528561,3541114,3553748,3568437,3591112,3594087,3602252,3614311,3624775,3647750,3646312,3658312,3657495,3676633,3685097,3699428,3698201,3711916,3713079,3730212,3736835,3745313,3747146,3760848,3771446,3787447,3784153,3805867,3806741,3815447,3824258,3838256,3841728,3852163,3854631,3860655,3849350,3867999,3873848,3880432,3885616,3887868,3899959,3900869,3912347,3919781,3913583,3927841,3926495,3933137,3934769,3939426,3954714,3953428,3955420,3953803,3967253,3973443,3979587,3985541,3992535,4041953,4014100,4012583,4019261,4026231,4033446,4041061,4044171,4051407,4063539,4070817,4077775,4084780,4082981,4099033,4106064,4111343,4121177,4129007,4136500,4120417,4139199,4165589,4165652,4180394,4187304,4201621,4194950,4202076,4209250,4210277,4200260,4222562,4233394,4239027,4243630,4245846,4235254,4254695,4263864,4243261,4211187,4214609,4183610];
+
+const sparse = labels.map((l, i) => i % 14 === 0 ? l : '');
+
+// Emission start index (Jul 26 = index 50)
+const emissionStartIdx = 50;
+// Covenant announcement (Mar 10 = index ~277)
+const covenantIdx = 277;
+
+// ---- CHART 1: Price vs Market Cap ----
+new Chart(document.getElementById('priceMcapChart'), {
+  type: 'line',
+  data: {
+    labels: sparse,
+    datasets: [{
+      label: 'Market Cap ($M)',
+      data: mcaps.map(m => m > 0 ? m / 1e6 : null),
+      borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.08)',
+      fill: true, tension: 0.2, pointRadius: 0, borderWidth: 2.5
+    }, {
+      label: 'Price ($)',
+      data: prices,
+      borderColor: '#6366f1',
+      tension: 0.2, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1'
+    }]
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: '#666', usePointStyle: true } },
+      tooltip: { backgroundColor: '#ffffff', callbacks: {
+        title: (items) => labels[items[0].dataIndex],
+        label: (ctx) => ctx.dataset.label.includes('Market') ? `MCap: $${ctx.raw?.toFixed(1)}M` : `Price: $${ctx.raw?.toFixed(2)}`
+      }},
+      annotation: {
+        annotations: {
+          athLine: { type: 'line', yMin: 54.4, yMax: 54.4, borderColor: 'rgba(34,197,94,0.3)', borderDash: [6,3], borderWidth: 1,
+            label: { display: true, content: 'MCap ATH: $54M (Jun)', position: 'start', backgroundColor: 'rgba(255,255,255,0.8)', color: '#16803c', font: { size: 10 } }
+          },
+          athNow: { type: 'line', yMin: 89.8, yMax: 89.8, borderColor: 'rgba(34,197,94,0.3)', borderDash: [6,3], borderWidth: 1,
+            label: { display: true, content: 'MCap ATH: $90M (Now)', position: 'end', backgroundColor: 'rgba(255,255,255,0.8)', color: '#22c55e', font: { size: 10, weight: 'bold' } }
+          },
+          priceAth: { type: 'point', xValue: 4, yValue: 42.88, yScaleID: 'y1', backgroundColor: '#6366f1', borderColor: '#fff', borderWidth: 2, radius: 6 },
+          priceAthLabel: { type: 'label', xValue: 4, yValue: 46, yScaleID: 'y1', content: ['Price ATH: $42.88'], color: '#6366f1', font: { size: 10, weight: 'bold' } }
+        }
+      }
+    },
+    scales: {
+      x: { ticks: { color: '#888', maxRotation: 45 }, grid: { color: 'rgba(0,0,0,0.06)' } },
+      y: { ticks: { color: '#22c55e', callback: v => '$' + v + 'M' }, grid: { color: 'rgba(0,0,0,0.06)' }, title: { display: true, text: 'Market Cap', color: '#22c55e' }, min: 0 },
+      y1: { position: 'right', ticks: { color: '#6366f1', callback: v => '$' + v }, grid: { display: false }, title: { display: true, text: 'Price', color: '#6366f1' }, min: 0, max: 55 }
+    }
+  }
+});
+
+// ---- CHART 2: Supply vs Price ----
+new Chart(document.getElementById('supplyPriceChart'), {
+  type: 'line',
+  data: {
+    labels: sparse,
+    datasets: [{
+      label: 'Circulating Supply (M)',
+      data: supply.map(s => s ? s / 1e6 : null),
+      borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.08)',
+      fill: true, tension: 0.2, pointRadius: 0, borderWidth: 2.5
+    }, {
+      label: 'Price ($)',
+      data: prices,
+      borderColor: '#6366f1',
+      tension: 0.2, pointRadius: 0, borderWidth: 2.5, yAxisID: 'y1'
+    }]
+  },
+  options: {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: '#666', usePointStyle: true } },
+      tooltip: { backgroundColor: '#ffffff', callbacks: {
+        title: (items) => labels[items[0].dataIndex],
+        label: (ctx) => ctx.dataset.label.includes('Supply') ? `Supply: ${(ctx.raw * 1e6).toLocaleString(undefined,{maximumFractionDigits:0})}` : `Price: $${ctx.raw?.toFixed(2)}`
+      }},
+      annotation: {
+        annotations: {
+          emissionStart: {
+            type: 'line', xMin: emissionStartIdx, xMax: emissionStartIdx,
+            borderColor: 'rgba(245,158,11,0.6)', borderDash: [6,3], borderWidth: 2,
+            label: { display: true, content: 'Emissions begin', position: 'start', backgroundColor: 'rgba(245,158,11,0.15)', color: '#f59e0b', font: { size: 10, weight: 'bold' }, padding: 4 }
+          },
+          phase1: {
+            type: 'label', xValue: 25, yValue: 4.7,
+            content: ['Phase 1: Flat supply,', 'early holders sell off'],
+            color: '#666', font: { size: 10 }
+          },
+          phase2: {
+            type: 'label', xValue: 160, yValue: 4.7,
+            content: ['Phase 2: Supply ramps up,', 'price grinds down under', 'constant emission pressure'],
+            color: '#666', font: { size: 10 }
+          },
+          covenant: {
+            type: 'line', xMin: covenantIdx, xMax: covenantIdx,
+            borderColor: 'rgba(34,197,94,0.6)', borderDash: [6,3], borderWidth: 2,
+            label: { display: true, content: 'Covenant-72B announced', position: 'start', backgroundColor: 'rgba(34,197,94,0.15)', color: '#22c55e', font: { size: 10, weight: 'bold' }, padding: 4 }
+          }
+        }
+      }
+    },
+    scales: {
+      x: { ticks: { color: '#888', maxRotation: 45 }, grid: { color: 'rgba(0,0,0,0.06)' } },
+      y: { ticks: { color: '#f43f5e', callback: v => v.toFixed(1) + 'M' }, grid: { color: 'rgba(0,0,0,0.06)' }, title: { display: true, text: 'Circulating Supply', color: '#f43f5e' }, min: 0, max: 5 },
+      y1: { position: 'right', ticks: { color: '#6366f1', callback: v => '$' + v }, grid: { display: false }, title: { display: true, text: 'Price', color: '#6366f1' }, min: 0 }
+    }
+  }
+});
+
+// ---- CHART 3: Projection ----
+const projLabels = ['Jun 25','Sep 25','Dec 25','Mar 26','Jun 26','Sep 26','Dec 26','Mar 27','Jun 27','Sep 27','Dec 27','Mar 28','Jun 28','Sep 28','Dec 28','Mar 29','Jun 29','Sep 29','Dec 29','Mar 30','Jun 30'];
+const projData = [1.27, 2.3, 3.1, 4.22, 5.2, 6.1, 6.9, 7.6, 8.3, 8.9, 9.5, 10.0, 10.5, 10.9, 11.3, 11.7, 12.0, 12.3, 12.8, 13.2, 13.6];
+new Chart(document.getElementById('projectionChart'), {
+  type: 'line',
+  data: {
+    labels: projLabels,
+    datasets: [{
+      label: 'Est. Supply (M)',
+      data: projData,
+      borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.08)',
+      fill: true, tension: 0.3, pointRadius: 5,
+      pointBackgroundColor: (ctx) => ctx.dataIndex === 3 ? '#1a1a1a' : '#f43f5e'
+    }, {
+      label: 'Max (21M)',
+      data: projLabels.map(() => 21),
+      borderColor: 'rgba(0,0,0,0.12)', borderDash: [8,4], pointRadius: 0
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: '#666' } },
+      annotation: { annotations: {
+        now: { type: 'line', xMin: 3, xMax: 3, borderColor: 'rgba(0,0,0,0.15)', borderDash: [4,4], borderWidth: 1,
+          label: { display: true, content: 'Now', position: 'start', backgroundColor: 'rgba(255,255,255,0.8)', color: '#666', font: { size: 10 } } },
+        halving2: { type: 'line', xMin: 17, xMax: 17, borderColor: 'rgba(245,158,11,0.3)', borderDash: [4,4], borderWidth: 1,
+          label: { display: true, content: '~Halving 2', position: 'start', backgroundColor: 'rgba(255,255,255,0.8)', color: '#b45309', font: { size: 10 } } }
+      }}
+    },
+    scales: {
+      x: { ticks: { color: '#888' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+      y: { ticks: { color: '#666', callback: v => v + 'M' }, grid: { color: 'rgba(0,0,0,0.06)' }, min: 0, max: 22 }
+    }
+  }
+});
+
+// ---- CHART 4: Benchmark ----
+new Chart(document.getElementById('benchmarkChart'), {
+  type: 'bar',
+  data: {
+    labels: ['MMLU', 'ARC-C', 'ARC-E', 'HellaSwag', 'MATH'],
+    datasets: [{
+      label: 'Covenant-72B (decentralized, 2026)',
+      data: [67.1, 56.8, 80.9, 80.6, 26.3],
+      backgroundColor: 'rgba(99,102,241,0.7)', borderColor: '#6366f1', borderWidth: 1
+    }, {
+      label: 'LLaMA-2-70B (Meta centralized, 2023)',
+      data: [65.6, 57.4, 79.6, 84.3, 10.7],
+      backgroundColor: 'rgba(244,63,94,0.5)', borderColor: '#f43f5e', borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#666' } } },
+    scales: {
+      x: { ticks: { color: '#666' }, grid: { color: 'rgba(0,0,0,0.04)' } },
+      y: { ticks: { color: '#666' }, grid: { color: 'rgba(0,0,0,0.06)' }, min: 0, max: 100 }
+    }
+  }
+});
+
+// ---- CHART 5: Scaling ----
+new Chart(document.getElementById('scalingChart'), {
+  type: 'line',
+  data: {
+    labels: ['7B', '13B', '40B', '72B (Covenant)', '200B', '400B', '700B+'],
+    datasets: [{
+      label: 'Potential Participants',
+      data: [10000, 6000, 2000, 800, 150, 40, 8],
+      borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.08)',
+      fill: true, tension: 0.3, pointRadius: 7,
+      pointBackgroundColor: (ctx) => ctx.dataIndex === 3 ? '#1a1a1a' : '#f43f5e'
+    }, {
+      label: 'Min GPUs per Node',
+      data: [1, 2, 4, 8, 16, 32, 64],
+      borderColor: '#6366f1', tension: 0.3, pointRadius: 7, yAxisID: 'y1'
+    }]
+  },
+  options: {
+    responsive: true, interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { labels: { color: '#666' } } },
+    scales: {
+      x: { ticks: { color: '#666' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+      y: { type: 'logarithmic', ticks: { color: '#f43f5e' }, grid: { color: 'rgba(0,0,0,0.06)' }, title: { display: true, text: 'Potential Participants', color: '#f43f5e' } },
+      y1: { position: 'right', ticks: { color: '#6366f1' }, grid: { display: false }, title: { display: true, text: 'Min GPUs per Node', color: '#6366f1' } }
+    }
+  }
+});
+</script>
+</body>
+</html>
